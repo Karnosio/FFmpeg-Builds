@@ -1,0 +1,72 @@
+name: Release Backup
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly on Sunday at 00:00 UTC
+    - cron: '0 0 1 * *'  # Monthly on 1st at 00:00 UTC
+  workflow_dispatch:
+
+jobs:
+  backup-latest-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup GitHub CLI
+        run: |
+          gh auth setup-git
+          gh auth status
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download 'latest' release from yt-dlp/FFmpeg-Builds
+        run: |
+          echo "Downloading assets from 'latest' release..."
+          mkdir -p latest-assets
+          gh release download latest \
+            --repo yt-dlp/FFmpeg-Builds \
+            --dir latest-assets \
+            --skip-existing
+          echo "Downloaded files:"
+          ls -lh latest-assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release in this repo
+        id: create_release
+        run: |
+          # Get the creation date of the 'latest' release from yt-dlp/FFmpeg-Builds
+          RELEASE_DATE=$(gh release view latest --repo yt-dlp/FFmpeg-Builds --json createdAt -q '.createdAt' | cut -d'T' -f1)
+          echo "Original release date: $RELEASE_DATE"
+
+          if [ "${{ github.event.schedule }}" == "0 0 * * 0" ]; then
+            TAG_NAME="weekly-$(date +'%Y-%m-%d')"
+          elif [ "${{ github.event.schedule }}" == "0 0 1 * *" ]; then
+            TAG_NAME="monthly-$(date +'%Y-%m')"
+          else
+            TAG_NAME="manual-$(date +'%Y-%m-%d-%H%M')"
+          fi
+          
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          gh release create "$TAG_NAME" \
+            --title "Auto-Build $RELEASE_DATE" \
+            --notes "Backup of 'latest' release as of $RELEASE_DATE"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload assets to new release
+        run: |
+          # Upload all files from latest-assets directory
+          gh release upload ${{ steps.create_release.outputs.tag_name }} latest-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -rf latest-assets
